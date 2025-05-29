@@ -3,8 +3,6 @@
 
 # main.tf만 예외로 추적
 !main.tf
-!.github/
-!.github/**
 
 # .gitignore 파일도 추적 (선택 사항)
 !.gitignore
