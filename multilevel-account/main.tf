@@ -1,33 +1,86 @@
 terraform {
   required_providers {
     aws = {
-      source = "hashicorp/aws"
+      source  = "hashicorp/aws"
       version = "~> 5.0" # optional
     }
   }
 }
 
+
 # Configure the AWS Provider
 provider "aws" {
-  region = "ap-northeast-2"
-  profile = "terraform-admin"
+  region                   = "ap-northeast-2"
+  profile                  = "terraform-admin"
   shared_credentials_files = ["${path.module}/.aws/credentials"]
+}
+
+# GitHub Actions에서 AWS에 접근할 수 있도록 OIDC 공급자 설정
+resource "aws_iam_openid_connect_provider" "github" {
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
+  thumbprint_list = [
+    "6938fd4d98bab03faadb97b34396831e3780aea1",
+    "1c58a3a8518e8759bf075b76b750d4f2df264fcd"
+  ]
+  # GitHub OIDC의 고정된 Thumbprint
+  # thumbprint_list는 GitHub의 OIDC 인증 서버의 신뢰성을 검증하기 위한 SHA-1 인증서 지문(Thumbprint)
+}
+
+# GitHub Actions에서 사용할 IAM Role 정의
+# 이 Role은 특정 GitHub 저장소에서 OIDC 토큰으로만 사용할 수 있도록 제한됨
+resource "aws_iam_role" "github_oidc_role" {
+  name = "github-actions-deploy-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Effect = "Allow",
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.github.arn
+        },
+        Action = "sts:AssumeRoleWithWebIdentity",
+        Condition = {
+          StringEquals = {
+            # GitHub OIDC 토큰의 대상(Audience)이 sts.amazonaws.com인 경우만 허용
+            "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
+          }
+          StringLike = {
+            # GitHub sh1220에서 발생한 워크플로만 허용 (브랜치, 워크플로 경로 등 추가로 제한 가능)
+            "token.actions.githubusercontent.com:sub" = "repo:sh1220/*"
+          }
+        }
+      }
+    ]
+  })
+}
+
+# 위 Role에 필요한 권한을 부여 (기본은 AdministratorAccess이지만 상황에 맞게 조정 가능)
+resource "aws_iam_role_policy_attachment" "github_oidc_policy_attach" {
+  role       = aws_iam_role.github_oidc_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+output "github_actions_role_arn" {
+  description = "ARN of the GitHub Actions IAM Role"
+  value       = aws_iam_role.github_oidc_role.arn
 }
 
 # 새로운 organization 생성
 resource "aws_organizations_organization" "org" {
   aws_service_access_principals = [ #조직 전체 수준에서 접근을 허용하고, Delegated Administrator(위임 관리자)로 계정에 등록할 수 있게 해줌.
-    "cloudtrail.amazonaws.com", # AWS CloudTrail이 전체 조직의 로그를 수집할 수 있게 함
-    "config.amazonaws.com", # AWS Config가 전체 조직의 리소스를 추적·관리할 수 있게 함
-    "guardduty.amazonaws.com", # guardduty / 위협탐지
-    "securityhub.amazonaws.com", #security hub / 조직 보안 표준
+    "cloudtrail.amazonaws.com",     # AWS CloudTrail이 전체 조직의 로그를 수집할 수 있게 함
+    "config.amazonaws.com",         # AWS Config가 전체 조직의 리소스를 추적·관리할 수 있게 함
+    "guardduty.amazonaws.com",      # guardduty / 위협탐지
+    "securityhub.amazonaws.com",    #security hub / 조직 보안 표준
     "inspector2.amazonaws.com",
     "detective.amazonaws.com",
-    "sso.amazonaws.com" 
+    "sso.amazonaws.com"
   ]
 
-  feature_set = "ALL" # 모든 기능 사용 가능 (OU, SCP, consolidated billing 등)
-  enabled_policy_types = ["SERVICE_CONTROL_POLICY"]  # 실제로 어떤 정책(SCP, TAG_POLICY 등)을 켤지 지정
+  feature_set          = "ALL"                      # 모든 기능 사용 가능 (OU, SCP, consolidated billing 등)
+  enabled_policy_types = ["SERVICE_CONTROL_POLICY"] # 실제로 어떤 정책(SCP, TAG_POLICY 등)을 켤지 지정
   # SERVICE_CONTROL_POLICY : SCP
 }
 
@@ -35,19 +88,19 @@ resource "aws_organizations_organization" "org" {
 # OUs 설정
 resource "aws_organizations_organizational_unit" "infrastructure_ou" {
   name      = "infra_OU"
-  parent_id = aws_organizations_organization.org.roots[0].id 
+  parent_id = aws_organizations_organization.org.roots[0].id
 }
 
 
 resource "aws_organizations_organizational_unit" "security_ou" {
   name      = "security_OU"
-  parent_id = aws_organizations_organization.org.roots[0].id 
+  parent_id = aws_organizations_organization.org.roots[0].id
 }
 
 
 resource "aws_organizations_organizational_unit" "workload_ou" {
   name      = "workload_OU"
-  parent_id = aws_organizations_organization.org.roots[0].id 
+  parent_id = aws_organizations_organization.org.roots[0].id
 }
 
 resource "aws_organizations_organizational_unit" "prod_ou" {
@@ -108,14 +161,15 @@ resource "aws_identitystore_user" "example" {
   user_name         = "admin"
   display_name      = "Admin User"
   emails {
-    value = "gibefef126@daxiake.com"
+    value   = "gibefef126@daxiake.com"
     primary = true
   }
-   name {
+  name {
     given_name  = "John"
     family_name = "Doe"
   }
 }
+
 
 # AdministratorAccess라는 이름의 Permission Set(권한 세트)을 생성.
 # Permission Set은 일종의 SSO 역할(Role) 이며, IAM Policy의 집합.
@@ -203,7 +257,7 @@ resource "aws_organizations_delegated_administrator" "detective_delegate" {
 
 # CloudTrail과 CloudWatch logs들에 대한 삭제 deny
 resource "aws_organizations_policy" "deny_delete_logs" {
-  name = "DenyDeleteCloudTrail"
+  name        = "DenyDeleteCloudTrail"
   description = "Prevent deletion of CloudTrail logs"
   content = jsonencode({
     "Version" : "2012-10-17",
@@ -228,12 +282,16 @@ resource "aws_organizations_policy_attachment" "attach_to_log_account" {
   target_id = aws_organizations_account.log_account.id
 }
 
+# SCP는 일단 하지말기 
+# governance를 잡는거라서 다 해보고 넣는것도 좋다.
+# 처으부터 글허게 할필요 ㅇ벗다
+# Idneity Center를 통해서만 유저를 만들기(IAM USer를 만들지 말자. / IAM create user)
 
 # Security OU 소속 모든 계정에서 S3 버킷과 객체에 public-read ACL을 설정하지 못하게 강제로 차단
 resource "aws_organizations_policy" "deny_s3_public" {
   name        = "DenyS3PublicAccess"
   description = "Deny public access to all S3 buckets"
-  content     = jsonencode({
+  content = jsonencode({
     Version = "2012-10-17",
     Statement = [
       {
@@ -262,7 +320,7 @@ resource "aws_organizations_policy_attachment" "attach_scp_to_ou" {
 
 ## sso 포탈 url 출력
 output "sso_portal_url" {
-  value = "https://${data.aws_ssoadmin_instances.this.identity_store_ids[0]}.awsapps.com/start"
+  value       = "https://${data.aws_ssoadmin_instances.this.identity_store_ids[0]}.awsapps.com/start"
   description = "SSO 사용자 포털 URL"
 }
 
@@ -272,3 +330,4 @@ output "sso_portal_url" {
 # organization에서 sso 허용
 
 # policy 활성화 organization => 정책 => 활성화
+
