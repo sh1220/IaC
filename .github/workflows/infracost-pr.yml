@@ -1,43 +1,28 @@
-name: Terraform Deploy
+name: Infracost PR Diff
 
 on:
-  push:
-    branches:
-      - main
   pull_request:
     paths:
       - '**.tf'
       - '**.tfvars'
-      
+
 permissions:
   id-token: write       # GitHub OIDC 토큰 발급 권한
   contents: read        # 리포지토리 내용 읽기 권한
   pull-requests: write  # Infracost에서 PR에 댓글 쓰기 허용
 
 jobs:
-  deploy:
+  infracost:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
-
-      - name: Configure AWS credentials from OIDC
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          role-to-assume: arn:aws:iam::479959292513:role/github-actions-deploy-role
-          aws-region: ap-northeast-2
-          audience: sts.amazonaws.com
-      
-      - name: Verify AWS OIDC Identity
-        run: aws sts get-caller-identity
-
       - name: Setup Infracost
         uses: infracost/actions/setup@v3
+        # 추가 입력값은 해당 링크 참고
         # 이 액션을 사용할 수 없는 경우, Docker 이미지 infracost/infracost:ci-0.10 사용
         with:
           api-key: ${{ secrets.INFRACOST_API_KEY }}
 
-     # PR의 기준 브랜치(main/master 등)를 체크아웃
+      # PR의 기준 브랜치(main/master 등)를 체크아웃
       - name: Checkout base branch
         uses: actions/checkout@v4
         with:
@@ -71,8 +56,8 @@ jobs:
       # 자세한 옵션은 https://www.infracost.io/docs/features/cli_commands/#comment-on-pull-requests 참고
       - name: Post Infracost comment
         run: |
-            infracost comment github --path=/tmp/infracost.json \
-                                      --repo=$GITHUB_REPOSITORY \
-                                      --github-token=${{ github.token }} \
-                                      --pull-request=${{ github.event.pull_request.number }} \
-                                      --behavior=update
+          infracost comment github --path=/tmp/infracost.json \
+                                    --repo=$GITHUB_REPOSITORY \
+                                    --github-token=${{ github.token }} \
+                                    --pull-request=${{ github.event.pull_request.number }} \
+                                    --behavior=update
