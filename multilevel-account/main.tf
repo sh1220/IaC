@@ -331,3 +331,21 @@ output "sso_portal_url" {
 
 # policy 활성화 organization => 정책 => 활성화
 
+# infracost 테스트 용 
+
+provider "aws" {
+  alias   = "workload"
+  region  = "ap-northeast-2"
+  profile = "terraform-admin"
+  shared_credentials_files = ["${path.module}/.aws/credentials"]
+  assume_role {
+    role_arn     = "arn:aws:iam::${aws_organizations_account.workload_account_A.id}:role/OrganizationAccountAccessRole"
+    session_name = "infracost-test"
+  }
+}
+# infracost 테스트 용 
+resource "aws_s3_bucket" "test_bucket" {
+  provider      = aws.workload
+  bucket        = "test-bucket-sh1220"
+  force_destroy = true # terraform destroy 또는 해당 리소스를 삭제할 때, 버킷에 어떤 객체가 있든 자동으로 삭제한 뒤 버킷 자체도 삭제합니다.
+}
